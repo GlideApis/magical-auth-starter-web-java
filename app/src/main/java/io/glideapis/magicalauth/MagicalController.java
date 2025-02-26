@@ -11,10 +11,9 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 
 import com.glideapi.GlideClient;
 import com.glideapi.services.MagicAuthClient;
-import com.glideapi.services.MagicAuthClient.MagicAuthVerifyProps;
 
 import io.github.cdimascio.dotenv.Dotenv;
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 public class MagicalController {
@@ -23,14 +22,39 @@ public class MagicalController {
     private final GlideClient glideClient;
     private final Map<String, Map<String, Object>> stateCache = new HashMap<>();
     private final String PORT;
+    private final String redirectUri;
 
     public MagicalController() {
-        dotenv = Dotenv.load();
-        String clientId = dotenv.get("GLIDE_CLIENT_ID");
-        String clientSecret = dotenv.get("GLIDE_CLIENT_SECRET");
-        this.PORT = dotenv.get("PORT", "8080");
+        System.out.println("Initializing MagicalController...");
+        
+        // Get environment variables with system env first
+        String clientId = System.getenv("GLIDE_CLIENT_ID");
+        String clientSecret = System.getenv("GLIDE_CLIENT_SECRET");
+        this.PORT = System.getenv().getOrDefault("PORT", "8080");
+        this.redirectUri = System.getenv("MAGIC_REDIRECT_URI");
+
+        System.out.println("Environment variables from system:");
+        System.out.println("PORT=" + this.PORT);
+        System.out.println("MAGIC_REDIRECT_URI exists: " + (redirectUri != null));
+        System.out.println("GLIDE_CLIENT_ID exists: " + (clientId != null));
+        System.out.println("GLIDE_CLIENT_SECRET exists: " + (clientSecret != null));
+
+        if (clientId == null || clientSecret == null) {
+            // Fallback to .env file for local development
+            try {
+                System.out.println("Attempting to load .env file...");
+                dotenv = Dotenv.load();
+                clientId = clientId != null ? clientId : dotenv.get("GLIDE_CLIENT_ID");
+                clientSecret = clientSecret != null ? clientSecret : dotenv.get("GLIDE_CLIENT_SECRET");
+                System.out.println(".env file loaded successfully");
+            } catch (Exception e) {
+                System.out.println("Error loading .env file: " + e.getMessage());
+                throw new RuntimeException("Missing required environment variables: GLIDE_CLIENT_ID and GLIDE_CLIENT_SECRET must be set");
+            }
+        }
 
         this.glideClient = new GlideClient(clientId, clientSecret);
+        System.out.println("MagicalController initialized successfully");
     }
 
     private String getClientIp(HttpServletRequest request) {
@@ -43,6 +67,16 @@ public class MagicalController {
             ip = ip.split(",")[0].strip();
         }
         return ip;
+    }
+
+    private String getRedirectUri() {
+        if (redirectUri != null) {
+            return redirectUri;
+        }
+        if (dotenv != null) {
+            return dotenv.get("MAGIC_REDIRECT_URI", "http://localhost:" + PORT + "/");
+        }
+        return "http://localhost:" + PORT + "/";
     }
 
     @PostMapping("/api/start-verification")
@@ -64,12 +98,14 @@ public class MagicalController {
             MagicAuthClient.BaseMagicAuthStartProps authInput = new MagicAuthClient.BaseMagicAuthStartProps();
             authInput.state = sessionId;
             authInput.phoneNumber = phoneNumber;
-            authInput.redirectUrl = dotenv.get("MAGIC_REDIRECT_URI", "http://localhost:" + PORT + "/");
+            authInput.redirectUrl = getRedirectUri();
             authInput.deviceIpAddress = deviceIpAddress;
 
+            System.out.println("Starting auth with redirectUrl: " + authInput.redirectUrl);
             MagicAuthClient.MagicAuthStartResponse authRes = glideClient.magicAuth.startAuth(authInput, null);
             return ResponseEntity.ok(authRes);
         } catch (Exception e) {
+            System.out.println("Error in startVerification: " + e.getMessage());
             e.printStackTrace();
             return ResponseEntity.badRequest().body(Map.of("error", "Error starting auth"));
         }
